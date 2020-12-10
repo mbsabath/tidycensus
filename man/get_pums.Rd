@@ -6,7 +6,8 @@
 \usage{
 get_pums(
   variables,
-  state,
+  state = NULL,
+  puma = NULL,
   year = 2018,
   survey = "acs5",
   rep_weights = NULL,
@@ -21,6 +22,10 @@ get_pums(
 \item{state}{A state, or vector of states, for which you would like to
 request data.  The entire US can be requested with \code{state = "all"} - though be patient with the data download!}
 
+\item{puma}{A vector of PUMAs from a single state, for which you would like
+to request data. To get data from PUMAs in more than one state, specify a
+named vector of state/PUMA pairs and set \code{state = "multiple"}.}
+
 \item{year}{The data year of the 1-year ACS sample or the endyear of the
 5-year sample. Defaults to 2018.}
 
@@ -33,7 +38,7 @@ errors; one of \code{"person"}, \code{"housing"}, or \code{"both"}.}
 
 \item{recode}{If TRUE, recodes variable values using Census data dictionary
 and creates a new \code{*_label} column for each variable that is recoded.
-Only available for 2017 and 2018 data. Defaults to FALSE.}
+Available for 2017 - 2019 data. Defaults to FALSE.}
 
 \item{show_call}{If TRUE, display call made to Census API. This can be very
 useful in debugging and determining if error messages returned are due to
@@ -52,6 +57,7 @@ Load data from the American Community Survey Public Use Microdata Series API
 \examples{
 \dontrun{
 get_pums(variables = "AGEP", state = "VT")
+get_pums(variables = "AGEP", state = "multiple", puma = c("UT" = 35008, "NV" = 00403))
 get_pums(variables = c("AGEP", "ANC1P"), state = "VT", recode = TRUE)
 get_pums(variables = "AGEP", state = "VT", survey = "acs1", rep_weights = "person")
 }

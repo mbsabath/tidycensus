@@ -126,7 +126,7 @@ format_variables_acs <- function(variables) {
 }
 
 load_data_acs <- function(geography, formatted_variables, key, year, state = NULL,
-                          county = NULL, survey, show_call = FALSE) {
+                          county = NULL, zcta = NULL, survey, show_call = FALSE) {
 
   base <- paste("https://api.census.gov/data",
                   as.character(year), "acs",
@@ -206,7 +206,17 @@ load_data_acs <- function(geography, formatted_variables, key, year, state = NUL
 
   }
 
-  else {
+  else if (!is.null(zcta))  {
+
+    for_area <- paste0(zcta, collapse = ",")
+
+    vars_to_get <- paste0(formatted_variables, ",NAME")
+
+    call <- GET(base, query = list(get = vars_to_get,
+                                   "for" = paste0(geography, ":", for_area),
+                                   key = key))
+
+  } else {
 
     vars_to_get <- paste0(formatted_variables, ",NAME")
 
@@ -288,17 +298,23 @@ load_data_decennial <- function(geography, variables, key, year, sumfile,
     vars_to_get <- paste0(var, ",NAME")
   }
 
-  if (year == 2010 || (year == 2000 && sumfile == "sf1")) {
-    base <- paste0("https://api.census.gov/data/",
-                   year,
-                   "/dec/",
-                   sumfile)
-  } else {
-    base <- paste0("https://api.census.gov/data/",
-                   year,
-                   "/",
-                   sumfile)
-  }
+
+  base <- paste0("https://api.census.gov/data/",
+                                  year,
+                                  "/dec/",
+                                  sumfile)
+
+  # if (year == 2010) {
+  #   base <- paste0("https://api.census.gov/data/",
+  #                  year,
+  #                  "/dec/",
+  #                  sumfile)
+  # } else {
+  #   base <- paste0("https://api.census.gov/data/",
+  #                  year,
+  #                  "/",
+  #                  sumfile)
+  # }
 
 
 
@@ -343,11 +359,8 @@ load_data_decennial <- function(geography, variables, key, year, sumfile,
 
     } else {
 
-      if (geography == "block") {
-        in_area <- paste0("state:", state, "%20county:*")
-      } else {
-        in_area <- paste0("state:", state)
-      }
+      in_area <- paste0("state:", state)
+
     }
 
     if (geography == "state" && !is.null(state)) {
@@ -437,6 +450,11 @@ load_data_decennial <- function(geography, variables, key, year, sumfile,
   id_vars <- names(dat)[! names(dat) %in% v2]
 
   # Paste into a GEOID column
+  # Apply tract band-aid (GH issue #317)
+  if ("tract" %in% id_vars && year == 2000) {
+    dat$tract <- stringr::str_pad(dat$tract, 6, "right", "0")
+  }
+
   dat$GEOID <- do.call(paste0, dat[id_vars])
 
 
@@ -646,8 +664,11 @@ load_data_estimates <- function(geography, product = NULL, variables = NULL, key
 
 
 
-load_data_pums <- function(variables, state, key, year, survey, recode, show_call) {
+load_data_pums <- function(variables, state, puma, key, year, survey, recode, show_call) {
 
+  # for which years is data dictionary available in pums_variables?
+  # we'll use this a couple times later on
+  recode_years <- 2017:2019
 
   var <- paste0(variables, collapse = ",")
 
@@ -657,23 +678,58 @@ load_data_pums <- function(variables, state, key, year, survey, recode, show_cal
                   year, survey)
 
 
-  if (!is.null(state)) {
-    state <- map_chr(state, function(x) {
-      paste0("0400000US",
-             validate_state(x))
-  })
-  }
+  if (!is.null(puma)) {
 
-  if (length(state) > 1) {
-    state <- paste0(state, collapse = ",")
+    if (length(state) > 1) {
+      stop('When requesting PUMAs for more than one state, you must set state to "multiple" and set puma to a named vector of state/PUMA pairs.', call. = FALSE)
+    }
+
+    # pumas in multiple states can be requested with a named vector of
+    # state / puma pairs in the puma argument of get_pums()
+    if (state == "multiple") {
+
+      # print FIPS code of states used just once
+      purrr::walk(unique(names(puma)), validate_state)
+
+      geo <- purrr::map2_chr(names(puma), unname(puma), function(x, y) {
+        paste0("7950000US", suppressMessages(validate_state(x)), y)
+      })
+
+      geo <- paste0(geo, collapse = ",")
+
+    } else {
+      # if PUMAs requested are in one state only
+      state <- validate_state(state)
+      geo <- map_chr(puma, function(x) {
+        paste0("7950000US", state, x)
+      })
+
+      if (length(puma) > 1) {
+        geo <- paste0(geo, collapse = ",")
+      }
+    }
+  } else {
+    # if no PUMAs specified, get all PUMAs in each state requested
+    if (!is.null(state)) {
+      geo <- map_chr(state, function(x) {
+        paste0("0400000US", validate_state(x))
+      })
+
+    } else {
+      geo <- NULL
+    }
+
+    if (length(state) > 1) {
+      geo <- paste0(geo, collapse = ",")
+
+    }
   }
 
   call <- GET(base,
               query = list(get = vars_to_get,
-                                 ucgid = state,
-                                 key = key),
+                           ucgid = geo,
+                           key = key),
               progress())
-
 
   if (show_call) {
     call_url <- gsub("&key.*", "", call$url)
@@ -719,8 +775,8 @@ load_data_pums <- function(variables, state, key, year, survey, recode, show_cal
   # necessary to match data dictionary codes and
   # convert variables to numeric according to data dictionary
 
-  # But wait, this only works when the serial numbers are correctly returned and and we have variable metadata in pums_variables
-  if (year %in% c(2017, 2018)) {
+  # Only works for years included in pums_variables data dictionary
+  if (year %in% recode_years) {
     var_val_length <- pums_variables_filter %>%
       filter(!is.na(.data$val_length)) %>%
       distinct(.data$var_code, .data$val_length, .data$val_na)
@@ -762,8 +818,8 @@ load_data_pums <- function(variables, state, key, year, survey, recode, show_cal
   # Do you want to return value labels also?
   if (recode) {
 
-    # Only works for 2017 because it's the only year included in pums_variables for now
-    if (year %in% 2017:2018) {
+    # Only works for years included in pums_variables data dictionary
+    if (year %in% recode_years) {
       var_lookup <- pums_variables_filter %>%
         select(.data$var_code, val = .data$val_min, .data$val_label)
 
@@ -798,11 +854,29 @@ load_data_pums <- function(variables, state, key, year, survey, recode, show_cal
       recoded_wide <- recoded_long %>%
         pivot_wider_spec(spec)
 
+      recode_v <- recoded_long %>% pull(var_code) %>% unique()
+
+      for (var in recode_v){
+
+        order_v <- var_lookup %>%
+          filter(var_code==var) %>%
+          pull(val_label)
+
+        var_label <- str_c(var, "_label")
+
+        recoded_wide[[var_label]] <-
+          readr::parse_factor(recoded_wide[[var_label]], ordered=TRUE, levels=order_v)
+
+      }
+
+
       # Join recoded columns to API return
       dat <- dat %>%
         left_join(recoded_wide, by = c("SERIALNO", "SPORDER"))
     } else {
-      message("Recoding is currently only supported for 2017 and 2018 1-year and 5-year data. Returning original data only.")
+      message(paste("Recoding is currently supported for",
+                    min(recode_years), "-", max(recode_years),
+                    "data. Returning original data only."))
       }
     }
   return(dat)
